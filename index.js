@@ -6,12 +6,8 @@ import OpenAI   from 'openai';
 import { Anthropic } from '@anthropic-ai/sdk';
 import fetch    from 'node-fetch';
 
-
 // 0) 환경변수 로드 (.env 또는 Render 환경변수)
 dotenv.config();
-
-// 0.1) CORS 허용 대상 (로컬 테스트용/배포용)
-const CLIENT_ORIGIN = process.env.CLIENT_URL || 'http://localhost:4000';
 
 // 1) MongoDB 연결
 mongoose.connect(process.env.MONGODB_URI, {
@@ -32,17 +28,26 @@ const Page = mongoose.models.Page || mongoose.model('Page', PageSchema);
 // 3) Express 앱 생성
 const app = express();
 
-// ─── 전역 CORS 설정 ────────────────────────────────────────
+// ─── CORS: 다중 Origin 허용 ─────────────────────────────────
+const ALLOWED_ORIGINS = [
+  'http://localhost:5173',                   // 로컬 클라이언트
+  'http://localhost:4000',                   // 로컬 서버
+  'https://ai-builder-client.onrender.com',  // 배포된 클라이언트
+];
+
 app.use(cors({
-  origin: CLIENT_ORIGIN,
+  origin: (incomingOrigin, callback) => {
+    if (!incomingOrigin || ALLOWED_ORIGINS.includes(incomingOrigin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
   methods: ['GET','POST','OPTIONS'],
   allowedHeaders: ['Content-Type'],
   credentials: true,
 }));
-app.options('*', cors({
-  origin: CLIENT_ORIGIN,
-  methods: ['GET','POST','OPTIONS'],
-}));
+app.options('*', cors());
 
 // JSON 바디 파서
 app.use(express.json());
@@ -52,35 +57,30 @@ app.get('/', (_req, res) => res.send('OK'));
 
 // 5) SSE 스트리밍 엔드포인트
 app.all('/api/stream', async (req, res) => {
-  // CORS 헤더 (안전망)
-  res.setHeader('Access-Control-Allow-Origin',      CLIENT_ORIGIN);
-  res.setHeader('Access-Control-Allow-Credentials', 'true');
-  res.setHeader('Access-Control-Allow-Methods',     'GET,POST,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers',     'Content-Type');
-
   // GET/POST 메시지 & 모델 파싱
-  const message     = req.method === 'GET' ? req.query.message : req.body.message;
-  const chosenModel = req.query.model   || 'gpt';
+  const message     = req.method === 'GET'
+    ? req.query.message
+    : req.body.message;
+  const chosenModel = req.query.model || 'gpt';
 
   // SSE 헤더
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.flushHeaders();
 
-  // 1) ChatGPT 분기
+  // 1) ChatGPT 분기 (OpenAI)
   if (chosenModel === 'gpt') {
     const ai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
     const stream = await ai.chat.completions.create({
-      model:  'gpt-4o-mini',
+      model: 'gpt-4o-mini',
       stream: true,
       messages: [
         { role: 'system', content: 'HTML 코드만 순수하게 출력하십시오.' },
         { role: 'user',   content: message }
       ],
     });
-
-    // 초기 ping
     res.write(': ping\n\n');
+    res.flush?.();
     for await (const chunk of stream) {
       const txt = chunk.choices[0].delta?.content;
       if (txt) {
@@ -88,7 +88,6 @@ app.all('/api/stream', async (req, res) => {
         res.flush?.();
       }
     }
-    // DONE 이벤트
     res.write('data: [DONE]\n\n');
     res.end();
     return;
@@ -111,8 +110,8 @@ app.all('/api/stream', async (req, res) => {
       max_tokens_to_sample: 1000,
       temperature: 0.0,
     });
-
     res.write(': ping\n\n');
+    res.flush?.();
     for await (const chunk of stream) {
       const txt = chunk.completion || '';
       if (txt) {
@@ -145,18 +144,11 @@ app.all('/api/stream', async (req, res) => {
       temperature: 0.0
     }),
   });
-
-  // 초기 ping
   res.write(': ping\n\n');
   res.flush?.();
-
-  // **pipe** 할 때 end: false 로 덮지 않도록 하고,
-  // 스트림 끝에서 직접 [DONE] + res.end() 호출
   resp.body.pipe(res, { end: false });
   resp.body.on('end', () => {
-    // DONE 이벤트
     res.write('data: [DONE]\n\n');
-    // 연결 종료
     res.end();
   });
 });
@@ -185,6 +177,6 @@ app.get('/preview/:id', async (req, res) => {
   }
 });
 
-// 8) 포트 바인딩
+// 8) 포트 바인딩 (Render용 포트 지원)
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => console.log(`🚀 Server listening on port ${PORT}`));
