@@ -1,334 +1,618 @@
-import dotenv   from 'dotenv';
-import express  from 'express';
-import cors     from 'cors';
-import mongoose from 'mongoose';
-import fetch    from 'node-fetch';
+// ai-builder-server/index.js
 
-// 0) 환경변수 로드 (.env 또는 Render 환경변수)
+import express from 'express';
+import cors from 'cors';
+import dotenv from 'dotenv';
+import mongoose from 'mongoose';
+import Anthropic from '@anthropic-ai/sdk';
+
 dotenv.config();
 
-// 1) MongoDB 연결
-mongoose.connect(process.env.MONGODB_URI)
-  .then(() => console.log('🔗 MongoDB connected'))
-  .catch(err => console.error('MongoDB connection error:', err));
-
-// 2) 페이지 스키마 & 모델 (수정 히스토리 추가)
-const PageSchema = new mongoose.Schema({
-  prompt:         { type: String },
-  html:           { type: String, required: true },
-  created:        { type: Date,   default: Date.now },
-  isModification: { type: Boolean, default: false },
-  originalPrompt: { type: String },
-  version:        { type: Number }, // 버전 구분용
-  modifications:  [{ 
-    request: String,
-    html: String,
-    timestamp: { type: Date, default: Date.now }
-  }]
-});
-const Page = mongoose.models.Page || mongoose.model('Page', PageSchema);
-
-// 3) Express 앱 생성
 const app = express();
+const PORT = process.env.PORT || 4000;
 
-// ─── CORS: 다중 Origin 허용 ─────────────────────────────────
-const ALLOWED_ORIGINS = [
-  'http://localhost:5173',                   // 로컬 클라이언트
-  'http://localhost:4000',                   // 로컬 서버
-  'https://ai-builder-client.onrender.com',  // 배포된 클라이언트
-];
+// ─── 미들웨어 설정 ──────────────────────────────────────
+app.use(cors());
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
-app.use(cors({
-  origin: (incomingOrigin, callback) => {
-    if (!incomingOrigin || ALLOWED_ORIGINS.includes(incomingOrigin)) {
-      callback(null, true);
-    } else {
-      callback(new Error('Not allowed by CORS'));
-    }
-  },
-  methods: ['GET','POST','OPTIONS'],
-  allowedHeaders: ['Content-Type'],
-  credentials: true,
-}));
-app.options('*', cors());
+// ─── MongoDB 연결 ───────────────────────────────────────
+mongoose.connect(process.env.MONGODB_URI)
+  .then(() => console.log('✅ MongoDB 연결 성공'))
+  .catch(err => console.error('❌ MongoDB 연결 실패:', err));
 
-// JSON 바디 파서
-app.use(express.json());
-
-// 4) Health-check 엔드포인트
-app.get('/', (_req, res) => res.send('OK'));
-
-// 5) SSE 스트리밍 엔드포인트 (수정 기능 추가)
-app.all('/api/stream', async (req, res) => {
-  console.log('Stream request received:', req.method);
-  console.log('Query params:', req.query);
-  console.log('Body:', req.body);
-  
-  // GET/POST 메시지 & 수정 모드 파싱
-  const { message, isModification, currentHtml } = req.method === 'GET'
-    ? { 
-        message: req.query.message, 
-        isModification: req.query.isModification === 'true', 
-        currentHtml: req.query.currentHtml || '' 
-      }
-    : req.body;
-
-  console.log('Parsed params:', { 
-    message: message ? 'exists' : 'missing', 
-    isModification, 
-    currentHtml: currentHtml ? 'exists' : 'none' 
-  });
-
-  if (!message) {
-    res.write('data: {"error": "Message parameter is required"}\n\n');
-    res.write('data: [DONE]\n\n');
-    res.end();
-    return;
+// ─── 페이지 저장 스키마 ─────────────────────────────────
+const PageSchema = new mongoose.Schema({
+  prompt: String,
+  html: String,
+  createdAt: { type: Date, default: Date.now },
+  isModification: { type: Boolean, default: false },
+  originalPrompt: String,
+  isHierarchical: { type: Boolean, default: false },
+  hierarchicalData: {
+    totalLayers: Number,
+    layers: [{
+      name: String,
+      description: String,
+      prompt: String,
+      html: String
+    }]
   }
+});
 
-  // SSE 헤더
-  res.setHeader('Content-Type', 'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache');
-  res.setHeader('Connection', 'keep-alive');
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.flushHeaders();
+const Page = mongoose.model('Page', PageSchema);
+
+// ─── Anthropic 클라이언트 초기화 ───────────────────────
+const anthropic = new Anthropic({
+  apiKey: process.env.ANTHROPIC_API_KEY,
+});
+
+// ─── 계층적 생성 전략 판단 함수 ────────────────────────
+const shouldUseHierarchicalGeneration = (prompt) => {
+  const complexityKeywords = [
+    '복잡한', '대규모', '많은 페이지', '섹션이 많은', '상세한',
+    '완전한', '전체', '포트폴리오', '쇼핑몰', 'e-commerce',
+    '블로그', '회사 홈페이지', '랜딩페이지', '다중 페이지',
+    '관리자', 'dashboard', '대시보드', '시스템'
+  ];
+  
+  const lengthThreshold = 100; // 프롬프트 길이 기준
+  const hasComplexityKeywords = complexityKeywords.some(keyword => 
+    prompt.toLowerCase().includes(keyword.toLowerCase())
+  );
+  
+  return hasComplexityKeywords || prompt.length > lengthThreshold;
+};
+
+// ─── 계층적 생성 계획 생성 함수 ────────────────────────
+const generateHierarchicalPlan = async (prompt) => {
+  const planningPrompt = `
+사용자의 요청: "${prompt}"
+
+이 요청을 분석하여 효율적인 계층적 생성 계획을 수립해주세요.
+
+다음 JSON 형태로 응답해주세요:
+{
+  "needsHierarchical": true/false,
+  "reason": "계층적 생성이 필요한 이유 또는 불필요한 이유",
+  "layers": [
+    {
+      "name": "레이어 이름",
+      "description": "이 레이어에서 수행할 작업",
+      "prompt": "이 레이어 생성을 위한 구체적인 프롬프트"
+    }
+  ]
+}
+
+계층 분할 원칙:
+1. 기본 구조 (HTML 골격, 기본 CSS)
+2. 주요 컴포넌트 (헤더, 네비게이션, 메인 섹션)
+3. 세부 컨텐츠 (상세 내용, 이미지, 텍스트)
+4. 고급 기능 (인터랙션, 애니메이션, 반응형)
+5. 최적화 및 폴리싱
+
+각 레이어는 토큰 제한(4000토큰)을 고려하여 적절한 크기로 나누세요.
+간단한 요청의 경우 needsHierarchical을 false로 설정하세요.
+`;
 
   try {
-    // 수정 모드일 때는 현재 HTML을 포함한 프롬프트 구성
-    let systemPrompt = `You are an AI that ONLY outputs pure HTML—no markdown, no extra explanation.
-
-ABSOLUTE IMAGE POLICY - READ CAREFULLY:
-- DO NOT include ANY images unless they are 100% relevant to the specific content
-- Random stock photos of landscapes, buildings, or people are FORBIDDEN
-- If you're making a Japan website, only use images if you have actual Japanese landmarks
-- If you're making a food website, only use images if you have actual food photos
-- If you cannot guarantee the image matches the content, DO NOT include any image
-- Most websites look better with excellent typography and NO images than with irrelevant images
-
-PREFERRED APPROACH:
-- Focus on beautiful typography, colors, and layout
-- Use CSS gradients, icons (emoji), and styling instead of images
-- Create visual interest through design, not random photos
-- Only add images when they genuinely serve the content purpose
-
-REMEMBER: Content-first, images only when truly necessary and relevant.`;
-    
-    let userMessage = message;
-
-    if (isModification && currentHtml) {
-      systemPrompt = `You are an AI that modifies existing HTML based on user requests. 
-IMPORTANT: Only output the complete modified HTML code, no explanations or markdown.
-
-ABSOLUTE IMAGE POLICY:
-- Remove any irrelevant or random images
-- Only keep images that are 100% relevant to the specific content
-- Prefer improving text content and styling over adding images
-- If images don't serve a clear purpose, remove them entirely
-
-Current HTML code:
-${currentHtml}
-
-Modify this HTML according to the user's request. Output only the complete modified HTML.`;
-      userMessage = `Please modify the HTML according to this request: ${message}`;
-    }
-
-    console.log('Making API call to Anthropic...');
-
-    // Anthropic API 호출 - 올바른 API 형식 사용
-    const resp = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': process.env.ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01'
-      },
-      body: JSON.stringify({
-        model: process.env.ANTHROPIC_MODEL || 'claude-3-sonnet-20240229',
-        stream: true,
-        messages: [
-          { role: 'user', content: `${systemPrompt}\n\n${userMessage}` }
-        ],
-        max_tokens: 2000,
-        temperature: 0.1
-      }),
+    const response = await anthropic.messages.create({
+      model: process.env.ANTHROPIC_MODEL || 'claude-3-haiku-20240307',
+      max_tokens: 2000,
+      messages: [{
+        role: 'user',
+        content: planningPrompt
+      }]
     });
 
-    console.log('API Response status:', resp.status);
+    const planText = response.content[0].text;
+    console.log('계층적 계획 응답:', planText);
 
-    if (!resp.ok) {
-      const errorText = await resp.text();
-      console.error('API Error:', errorText);
-      throw new Error(`API responded with status: ${resp.status} - ${errorText}`);
+    // JSON 추출 및 파싱
+    const jsonMatch = planText.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      const plan = JSON.parse(jsonMatch[0]);
+      return plan;
+    }
+    
+    throw new Error('유효한 JSON 계획을 생성하지 못했습니다');
+  } catch (error) {
+    console.error('계층적 계획 생성 오류:', error);
+    return { needsHierarchical: false, reason: '계획 생성 실패' };
+  }
+};
+
+// ─── 토큰 사용량 최적화 함수 ──────────────────────────
+const optimizePromptForTokens = (prompt, isModification = false, previousHtml = '') => {
+  // 수정 요청의 경우 이전 HTML을 요약하여 토큰 절약
+  if (isModification && previousHtml) {
+    const htmlSummary = summarizeHtml(previousHtml);
+    return {
+      optimizedPrompt: prompt,
+      context: `이전 HTML 요약: ${htmlSummary}`,
+      estimatedTokens: calculateTokenEstimate(prompt + htmlSummary)
+    };
+  }
+  
+  return {
+    optimizedPrompt: prompt,
+    context: '',
+    estimatedTokens: calculateTokenEstimate(prompt)
+  };
+};
+
+// ─── HTML 요약 함수 ─────────────────────────────────────
+const summarizeHtml = (html) => {
+  try {
+    // HTML에서 주요 구조만 추출
+    const structureSummary = html
+      .replace(/<style[\s\S]*?<\/style>/gi, '[CSS스타일]')
+      .replace(/<script[\s\S]*?<\/script>/gi, '[JavaScript]')
+      .replace(/<!--[\s\S]*?-->/g, '')
+      .replace(/\s+/g, ' ')
+      .substring(0, 500); // 최대 500자로 제한
+    
+    return structureSummary + (html.length > 500 ? '...' : '');
+  } catch (error) {
+    return '이전 HTML 구조 요약 실패';
+  }
+};
+
+// ─── 토큰 추정 함수 ─────────────────────────────────────
+const calculateTokenEstimate = (text) => {
+  // 대략적인 토큰 추정 (1토큰 ≈ 4자)
+  return Math.ceil(text.length / 4);
+};
+
+// ─── 헬스체크 및 상태 확인 API ─────────────────────────
+app.get('/api/health', (req, res) => {
+  const healthInfo = {
+    status: 'healthy',
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime(),
+    mongodb: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
+    anthropic: !!process.env.ANTHROPIC_API_KEY ? 'configured' : 'missing',
+    model: process.env.ANTHROPIC_MODEL || 'claude-3-haiku-20240307',
+    memoryUsage: process.memoryUsage(),
+    activeConnections: 0 // TODO: 실제 연결 수 추적
+  };
+  
+  res.json(healthInfo);
+});
+
+// ─── 연결 테스트 API ───────────────────────────────────
+app.get('/api/test-connection', async (req, res) => {
+  try {
+    // Anthropic API 테스트
+    const testResponse = await anthropic.messages.create({
+      model: process.env.ANTHROPIC_MODEL || 'claude-3-haiku-20240307',
+      max_tokens: 10,
+      messages: [{ role: 'user', content: 'Hello' }]
+    });
+    
+    res.json({
+      success: true,
+      anthropic: 'working',
+      model: process.env.ANTHROPIC_MODEL || 'claude-3-haiku-20240307',
+      testResponse: testResponse.content[0].text
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      anthropic: 'failed'
+    });
+  }
+});
+
+// ─── 스트리밍 HTML 생성 API ─────────────────────────────
+app.get('/api/stream', async (req, res) => {
+  const { 
+    message, 
+    isModification = 'false', 
+    currentHtml = '',
+    isHierarchical = 'false',
+    layerIndex = '0',
+    totalLayers = '1'
+  } = req.query;
+
+  console.log('스트림 요청:', {
+    message,
+    isModification: isModification === 'true',
+    hasCurrentHtml: !!currentHtml,
+    isHierarchical: isHierarchical === 'true',
+    layerIndex: parseInt(layerIndex),
+    totalLayers: parseInt(totalLayers)
+  });
+
+  // ─── SSE 헤더 설정 ──────────────────────────────────
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Headers': 'Cache-Control'
+  });
+
+  const sendEvent = (data) => {
+    try {
+      res.write(`data: ${JSON.stringify(data)}\n\n`);
+    } catch (error) {
+      console.error('Event send error:', error);
+    }
+  };
+
+  const sendMessage = (content) => {
+    try {
+      res.write(`data: ${content}\n\n`);
+    } catch (error) {
+      console.error('Message send error:', error);
+    }
+  };
+
+  const sendPing = () => {
+    sendEvent({ type: 'ping', timestamp: Date.now() });
+  };
+
+  // ─── 주기적 ping 전송 (연결 유지) ──────────────────────
+  const pingInterval = setInterval(sendPing, 10000); // 10초마다
+
+  // ─── 연결 정리 함수 ────────────────────────────────────
+  const cleanup = () => {
+    clearInterval(pingInterval);
+    if (!res.headersSent) {
+      res.end();
+    }
+  };
+
+  // ─── 클라이언트 연결 해제 감지 ─────────────────────────
+  req.on('close', () => {
+    console.log('클라이언트 연결 해제');
+    cleanup();
+  });
+
+  req.on('aborted', () => {
+    console.log('요청 중단됨');
+    cleanup();
+  });
+
+  try {
+    // ─── 계층적 생성이 아닌 경우 계획 단계 ─────────────
+    if (isHierarchical === 'false' && isModification === 'false') {
+      // 계층적 생성 필요성 판단
+      if (shouldUseHierarchicalGeneration(message)) {
+        console.log('계층적 생성 필요성 감지, 계획 생성 중...');
+        
+        const hierarchicalPlan = await generateHierarchicalPlan(message);
+        
+        if (hierarchicalPlan.needsHierarchical && hierarchicalPlan.layers?.length > 1) {
+          console.log('계층적 생성 계획:', hierarchicalPlan);
+          
+          // 계층적 생성 계획을 클라이언트에 전송
+          sendMessage(`[HIERARCHICAL_PLAN]${JSON.stringify(hierarchicalPlan)}`);
+          sendMessage('[DONE]');
+          return;
+        }
+      }
     }
 
-    res.write('data: {"type":"ping"}\n\n');
+    // ─── 프롬프트 최적화 ────────────────────────────────
+    const optimized = optimizePromptForTokens(
+      message, 
+      isModification === 'true', 
+      currentHtml
+    );
+
+    console.log(`토큰 추정량: ${optimized.estimatedTokens}`);
+
+    // ─── AI 프롬프트 구성 ───────────────────────────────
+    let systemPrompt = '';
+    let userPrompt = '';
+
+    if (isHierarchical === 'true') {
+      // 계층적 생성 모드
+      const layerNum = parseInt(layerIndex) + 1;
+      const totalNum = parseInt(totalLayers);
+      
+      systemPrompt = `당신은 웹사이트를 계층적으로 생성하는 전문가입니다.
+
+현재 진행 상황: ${layerNum}/${totalNum} 레이어
+이전 HTML 컨텍스트: ${currentHtml ? '제공됨' : '없음'}
+
+지침:
+1. 현재 레이어에 집중하여 완성도 높은 HTML/CSS 생성
+2. 이전 레이어와 자연스럽게 통합되도록 구성
+3. 다음 레이어를 위한 확장 가능한 구조 제공
+4. 토큰 제한을 고려하여 효율적으로 생성
+5. 완전한 HTML 문서 형태로 응답
+
+응답 형식: 완전한 HTML 문서만 생성하세요. 설명이나 주석은 최소화하세요.`;
+
+      userPrompt = currentHtml 
+        ? `이전 HTML을 기반으로 다음 요청을 수행해주세요:
+
+요청: ${optimized.optimizedPrompt}
+
+기존 HTML:
+${currentHtml.substring(0, 2000)}${currentHtml.length > 2000 ? '\n...(truncated)' : ''}
+
+위 HTML을 확장하고 개선하여 완전한 HTML 문서를 생성해주세요.`
+        : optimized.optimizedPrompt;
+
+    } else if (isModification === 'true') {
+      // 수정 모드
+      systemPrompt = `당신은 HTML/CSS 수정 전문가입니다. 기존 코드를 분석하고 요청된 수정사항을 정확히 적용하세요.
+
+지침:
+1. 기존 HTML 구조와 스타일을 최대한 보존
+2. 요청된 수정사항만 정확히 적용
+3. 수정 후에도 완전히 작동하는 HTML 문서 유지
+4. 불필요한 변경 최소화
+
+응답 형식: 수정된 완전한 HTML 문서만 제공하세요.`;
+
+      userPrompt = `다음 HTML을 수정해주세요:
+
+수정 요청: ${optimized.optimizedPrompt}
+
+${optimized.context}
+
+기존 HTML:
+${currentHtml.substring(0, 3000)}${currentHtml.length > 3000 ? '\n...(truncated)' : ''}
+
+위의 수정 요청에 따라 HTML을 수정하여 완전한 문서로 제공해주세요.`;
+
+    } else {
+      // 새 생성 모드
+      systemPrompt = `당신은 뛰어난 웹 개발자입니다. 사용자의 요청에 따라 완전하고 아름다운 HTML/CSS 웹페이지를 생성하세요.
+
+지침:
+1. 완전한 HTML 문서 (DOCTYPE, html, head, body 포함)
+2. 내장 CSS 스타일 사용 (external 파일 금지)
+3. 반응형 디자인 적용
+4. 모던하고 깔끔한 디자인
+5. 접근성 고려 (alt 텍스트, semantic HTML)
+6. 실제 운영 가능한 수준의 완성도
+
+응답 형식: HTML 코드만 제공하고, 설명은 최소화하세요.`;
+
+      userPrompt = optimized.optimizedPrompt;
+    }
+
+    // ─── Anthropic API 스트리밍 요청 ────────────────────
+    const stream = await anthropic.messages.create({
+      model: process.env.ANTHROPIC_MODEL || 'claude-3-haiku-20240307',
+      max_tokens: 4000,
+      system: systemPrompt,
+      messages: [{
+        role: 'user',
+        content: userPrompt
+      }],
+      stream: true
+    });
+
+    // ─── 스트리밍 데이터 처리 ───────────────────────────
+    let accumulatedContent = '';
+    let tokenCount = 0;
+    let lastSendTime = Date.now();
     
-    // Node.js 환경에서 스트림 처리 - readable stream 사용
-    let buffer = '';
-    let chunkBuffer = '';
-    let chunkTimer = null;
+    // 초기 상태 전송
+    sendEvent({ type: 'status', message: 'AI 응답 생성 시작...' });
     
-    // 청크를 모아서 전송하는 함수 (깜빡임 방지)
-    const flushChunkBuffer = () => {
-      if (chunkBuffer.trim()) {
-        const chatCompletionFormat = {
+    for await (const chunk of stream) {
+      // 연결 상태 확인
+      if (res.destroyed || !res.writable) {
+        console.log('클라이언트 연결 끊어짐, 스트림 중단');
+        break;
+      }
+      
+      if (chunk.type === 'content_block_delta' && chunk.delta?.text) {
+        const textPiece = chunk.delta.text;
+        accumulatedContent += textPiece;
+        tokenCount++;
+        
+        // 클라이언트에 직접 텍스트 스트리밍 전송 (OpenAI 형식)
+        sendEvent({
           choices: [{
             delta: {
-              content: chunkBuffer
+              content: textPiece
             }
           }]
-        };
-        console.log('Sending content chunk:', chunkBuffer.substring(0, 50) + '...');
-        res.write(`data: ${JSON.stringify(chatCompletionFormat)}\n\n`);
-        chunkBuffer = '';
+        });
+        
+        // 주기적 상태 업데이트 (3초마다)
+        const now = Date.now();
+        if (now - lastSendTime > 3000) {
+          sendEvent({ 
+            type: 'progress', 
+            chars: accumulatedContent.length,
+            tokens: tokenCount,
+            timestamp: now
+          });
+          lastSendTime = now;
+        }
+      }
+      
+      // 스트림 완료 감지
+      if (chunk.type === 'message_stop') {
+        break;
+      }
+    }
+
+    // ─── 스트림 완료 처리 ───────────────────────────────
+    console.log(`스트리밍 완료 - 총 ${accumulatedContent.length}자, ${tokenCount}토큰 생성`);
+    
+    // 완료 상태 전송
+    sendEvent({ 
+      type: 'completion', 
+      totalChars: accumulatedContent.length,
+      totalTokens: tokenCount,
+      success: true
+    });
+    
+    // 스트림 종료 신호
+    sendMessage('[DONE]');
+    
+    // 정리
+    cleanup();
+
+  } catch (error) {
+    console.error('스트리밍 오류:', error);
+    
+    // 오류 세부 정보 포함
+    const errorDetails = {
+      error: error.message || '알 수 없는 오류가 발생했습니다',
+      type: error.type || 'unknown_error',
+      timestamp: new Date().toISOString(),
+      requestInfo: {
+        message: message?.substring(0, 100),
+        isModification: isModification === 'true',
+        isHierarchical: isHierarchical === 'true'
       }
     };
     
-    resp.body.on('data', (chunk) => {
-      buffer += chunk.toString();
-      const lines = buffer.split('\n');
-      
-      // 마지막 라인은 incomplete일 수 있으므로 buffer에 보관
-      buffer = lines.pop() || '';
-      
-      for (const line of lines) {
-        if (line.startsWith('data: ')) {
-          const data = line.slice(6);
-          if (data === '[DONE]') {
-            // 마지막 버퍼 전송
-            if (chunkTimer) clearTimeout(chunkTimer);
-            flushChunkBuffer();
-            
-            console.log('Stream completed');
-            res.write('data: [DONE]\n\n');
-            res.end();
-            return;
-          }
-          
-          try {
-            const parsed = JSON.parse(data);
-            if (parsed.type === 'content_block_delta' && parsed.delta?.text) {
-              // 청크를 버퍼에 모음
-              chunkBuffer += parsed.delta.text;
-              
-              // 더 큰 청크나 의미있는 단위로 전송
-              if (chunkBuffer.length > 50 || chunkBuffer.includes('>') || chunkBuffer.includes('\n')) {
-                if (chunkTimer) clearTimeout(chunkTimer);
-                flushChunkBuffer();
-              } else {
-                // 타이머로 주기적으로 전송 (깜빡임 방지)
-                if (chunkTimer) clearTimeout(chunkTimer);
-                chunkTimer = setTimeout(flushChunkBuffer, 200); // 200ms마다 전송
-              }
-            }
-          } catch (parseError) {
-            console.log('Parse error for line:', line, parseError);
-          }
-        }
-      }
+    sendEvent(errorDetails);
+    cleanup();
+    sendMessage('[DONE]');
+  }
+});
+
+// ─── 페이지 저장 API ────────────────────────────────────
+app.post('/api/save', async (req, res) => {
+  try {
+    const { 
+      prompt, 
+      html, 
+      isModification = false, 
+      originalPrompt,
+      isHierarchical = false,
+      hierarchicalData = null
+    } = req.body;
+
+    const page = new Page({
+      prompt,
+      html,
+      isModification,
+      originalPrompt: originalPrompt || prompt,
+      isHierarchical,
+      hierarchicalData
     });
 
-    resp.body.on('end', () => {
-      // 마지막 버퍼 처리
-      if (buffer && buffer.startsWith('data: ')) {
-        const data = buffer.slice(6);
-        if (data !== '[DONE]') {
-          try {
-            const parsed = JSON.parse(data);
-            if (parsed.type === 'content_block_delta' && parsed.delta?.text) {
-              const chatCompletionFormat = {
-                choices: [{
-                  delta: {
-                    content: parsed.delta.text
-                  }
-                }]
-              };
-              res.write(`data: ${JSON.stringify(chatCompletionFormat)}\n\n`);
-            }
-          } catch (parseError) {
-            console.log('Parse error for final buffer:', buffer, parseError);
-          }
-        }
-      }
-      
-      res.write('data: [DONE]\n\n');
-      res.end();
-    });
-
-    resp.body.on('error', (error) => {
-      console.error('Stream body error:', error);
-      res.write(`data: ${JSON.stringify({ error: error.message })}\n\n`);
-      res.write('data: [DONE]\n\n');
-      res.end();
+    await page.save();
+    
+    console.log(`페이지 저장 완료: ${page._id}`);
+    res.json({ 
+      success: true, 
+      id: page._id,
+      isHierarchical,
+      layerCount: hierarchicalData?.totalLayers || 1
     });
 
   } catch (error) {
-    console.error('Stream error:', error);
-    res.write(`data: ${JSON.stringify({ error: error.message })}\n\n`);
-    res.write('data: [DONE]\n\n');
-    res.end();
-  }
-});
-
-// 6) 생성된 HTML 저장 엔드포인트 (수정 히스토리 포함)
-app.post('/api/save', async (req, res) => {
-  try {
-    const { prompt, html, isModification, originalPrompt } = req.body;
-    
-    // HTML 내용 검증
-    if (!html || html.trim().length === 0) {
-      console.log('Empty HTML content, skipping save');
-      return res.status(400).json({ error: 'HTML 내용이 비어있습니다.' });
-    }
-    
-    // 모든 버전을 별도 문서로 저장 (히스토리 보존)
-    const doc = await Page.create({ 
-      prompt, 
-      html, 
-      isModification,
-      originalPrompt: originalPrompt || prompt,
-      version: Date.now() // 버전 구분을 위한 타임스탬프
+    console.error('페이지 저장 오류:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
     });
-    
-    console.log(`Saved new document with ID: ${doc._id} (isModification: ${isModification})`);
-    return res.json({ id: doc._id.toString() });
-    
-  } catch (err) {
-    console.error('Save error:', err);
-    return res.status(500).json({ error: '저장 실패' });
   }
 });
 
-// 7) 저장된 HTML 미리보기
+// ─── 페이지 미리보기 API ────────────────────────────────
 app.get('/preview/:id', async (req, res) => {
   try {
-    const doc = await Page.findById(req.params.id);
-    if (!doc) return res.status(404).send('Not found');
-    return res.send(doc.html);
-  } catch (err) {
-    console.error('Preview error:', err);
-    return res.status(500).send('Error');
-  }
-});
-
-// 8) 페이지 히스토리 조회 (선택적 기능)
-app.get('/api/history/:id', async (req, res) => {
-  try {
-    const doc = await Page.findById(req.params.id);
-    if (!doc) return res.status(404).json({ error: 'Not found' });
+    const page = await Page.findById(req.params.id);
     
-    return res.json({
-      originalPrompt: doc.originalPrompt || doc.prompt,
-      created: doc.created,
-      modifications: doc.modifications,
-      currentHtml: doc.html
-    });
-  } catch (err) {
-    console.error('History error:', err);
-    return res.status(500).json({ error: 'Error fetching history' });
+    if (!page) {
+      return res.status(404).send(`
+        <html>
+          <body style="font-family: Arial; text-align: center; padding: 50px;">
+            <h1>404 - 페이지를 찾을 수 없습니다</h1>
+            <p>요청하신 페이지가 존재하지 않습니다.</p>
+          </body>
+        </html>
+      `);
+    }
+
+    // HTML에 메타데이터 추가
+    const enhancedHtml = page.html.replace(
+      '<head>',
+      `<head>
+        <meta name="generator" content="AI Web Builder">
+        <meta name="created" content="${page.createdAt.toISOString()}">
+        <meta name="hierarchical" content="${page.isHierarchical}">
+        ${page.isHierarchical ? `<meta name="layers" content="${page.hierarchicalData?.totalLayers || 1}">` : ''}
+      `
+    );
+
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.send(enhancedHtml);
+
+  } catch (error) {
+    console.error('미리보기 오류:', error);
+    res.status(500).send(`
+      <html>
+        <body style="font-family: Arial; text-align: center; padding: 50px;">
+          <h1>500 - 서버 오류</h1>
+          <p>페이지를 불러오는 중 오류가 발생했습니다.</p>
+        </body>
+      </html>
+    `);
   }
 });
 
-// 9) 포트 바인딩 (Render용 포트 지원)
-const PORT = process.env.PORT || 4000;
-app.listen(PORT, () => console.log(`🚀 Server listening on port ${PORT}`));
+// ─── 페이지 목록 API (선택사항) ──────────────────────────
+app.get('/api/pages', async (req, res) => {
+  try {
+    const { page = 1, limit = 20, hierarchical } = req.query;
+    
+    const query = {};
+    if (hierarchical !== undefined) {
+      query.isHierarchical = hierarchical === 'true';
+    }
+
+    const pages = await Page.find(query)
+      .select('prompt createdAt isModification isHierarchical hierarchicalData._id')
+      .sort({ createdAt: -1 })
+      .limit(limit * 1)
+      .skip((page - 1) * limit);
+
+    const total = await Page.countDocuments(query);
+
+    res.json({
+      success: true,
+      pages,
+      pagination: {
+        current: parseInt(page),
+        total: Math.ceil(total / limit),
+        hasNext: page * limit < total
+      }
+    });
+
+  } catch (error) {
+    console.error('페이지 목록 조회 오류:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
+  }
+});
+
+// ─── 서버 시작 ──────────────────────────────────────────
+app.listen(PORT, () => {
+  console.log(`🚀 서버가 포트 ${PORT}에서 실행 중입니다`);
+  console.log(`📊 MongoDB: ${process.env.MONGODB_URI ? '연결됨' : '설정 필요'}`);
+  console.log(`🤖 Anthropic API: ${process.env.ANTHROPIC_API_KEY ? '설정됨' : '설정 필요'}`);
+  console.log(`🧠 사용 모델: ${process.env.ANTHROPIC_MODEL || 'claude-3-haiku-20240307'}`);
+  
+  if (!process.env.ANTHROPIC_API_KEY) {
+    console.warn('⚠️  ANTHROPIC_API_KEY가 설정되지 않았습니다!');
+  }
+});
+
+// ─── 우아한 종료 처리 ───────────────────────────────────
+process.on('SIGINT', async () => {
+  console.log('\n🛑 서버 종료 중...');
+  await mongoose.connection.close();
+  console.log('✅ MongoDB 연결 해제 완료');
+  process.exit(0);
+});
