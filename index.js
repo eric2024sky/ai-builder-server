@@ -3,6 +3,8 @@ import express  from 'express';
 import cors     from 'cors';
 import mongoose from 'mongoose';
 import OpenAI   from 'openai';
+import { Anthropic } from '@anthropic-ai/sdk';
+import fetch    from 'node-fetch';   // HTTP 호출용
 
 // 0) 환경변수 로드 (.env 또는 Render 환경변수)
 dotenv.config();
@@ -12,8 +14,7 @@ const CLIENT_ORIGIN = process.env.CLIENT_URL || 'http://localhost:5173';
 
 // 1) MongoDB 연결
 mongoose.connect(process.env.MONGODB_URI, {
-  // useNewUrlParser/useUnifiedTopology 옵션은 MongoDB 드라이버 4.x 에선 더 이상 필요치 않으나
-  // 경고 없이 사용하려면 아래 두 줄을 제거해도 됩니다.
+  // useNewUrlParser/useUnifiedTopology 옵션은 MongoDB 드라이버 4.x 에선 선택 사항
   useNewUrlParser:    true,
   useUnifiedTopology: true,
 })
@@ -33,12 +34,11 @@ const app = express();
 
 // ─── 전역 CORS 설정 ────────────────────────────────────────
 app.use(cors({
-  origin: CLIENT_ORIGIN,            // 허용할 프론트엔드 도메인
+  origin: CLIENT_ORIGIN,
   methods: ['GET','POST','OPTIONS'],
   allowedHeaders: ['Content-Type'],
-  credentials: true,                // 쿠키/인증이 필요하면 true
+  credentials: true,
 }));
-// 모든 엔드포인트에 대해 Preflight(OPTIONS) 요청 허용
 app.options('*', cors({
   origin: CLIENT_ORIGIN,
   methods: ['GET','POST','OPTIONS'],
@@ -54,52 +54,121 @@ app.get('/', (_req, res) => {
 
 // 5) SSE 스트리밍 엔드포인트
 app.all('/api/stream', async (req, res) => {
-  // 만약 cors 미들웨어가 누락됐다면, 강제로 헤더 추가
-  res.setHeader('Access-Control-Allow-Origin', CLIENT_ORIGIN);
+  // CORS 헤더 (안전망)
+  res.setHeader('Access-Control-Allow-Origin',      CLIENT_ORIGIN);
   res.setHeader('Access-Control-Allow-Credentials', 'true');
-  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Methods',     'GET,POST,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers',     'Content-Type');
 
-  // GET/POST 둘 다 지원
-  const message = req.method === 'GET'
-    ? req.query.message
-    : req.body.message;
+  // GET/POST 메시지 파싱
+  const message     = req.method === 'GET' ? req.query.message : req.body.message;
+  const chosenModel = req.query.model || 'gpt';
 
   // SSE 헤더
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.flushHeaders();
 
-  // OpenAI 스트림 요청
-  const ai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-  const systemPrompt = [
-    '당신은 “실행 가능한 HTML 문서”만 순수하게 출력해야 합니다.',
-    '어떠한 부연 설명도, 마크다운 설명도, 리스트도 하지 마세요.',
-    '출력 예시: <html><head>…</head><body>…</body></html>',
-  ].join(' ');
+  // 1) ChatGPT (OpenAI) 분기
+  if (chosenModel === 'gpt') {
+    console.log('⏳ OpenAI GPT stream start');
+    const ai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    const stream = await ai.chat.completions.create({
+      model:  'gpt-4o-mini',
+      stream: true,
+      messages: [
+        { role: 'system', content: 'HTML 코드만 순수하게 출력하십시오.' },
+        { role: 'user',   content: message }
+      ],
+    });
 
-  let fullHtml = '';
-  const stream = await ai.chat.completions.create({
-    model:  'gpt-4o-mini',
-    stream: true,
-    messages: [
-      { role: 'system', content: systemPrompt },
-      { role: 'user',   content: message }
-    ],
-  });
+    // 초기 ping
+    res.write(': ping\n\n');
+    res.flush?.();
 
-  // 조각 단위로 내려보내기
-  for await (const chunk of stream) {
-    const text = chunk.choices[0].delta?.content;
-    if (text) {
-      res.write(`data: ${text}\n\n`);
-      fullHtml += text;
+    for await (const chunk of stream) {
+      const txt = chunk.choices[0].delta?.content;
+      if (txt) {
+        console.log('⏳ GPT chunk:', txt.length, 'chars');
+        res.write(`data: ${txt}\n\n`);
+        res.flush?.();
+      }
     }
+    res.write('data: [DONE]\n\n');
+    console.log('✅ OpenAI GPT stream done');
+    return;
   }
 
-  // 스트림 완료 신호
-  res.write('data: [DONE]\n\n');
-  res.end();
+  // 2) Anthropic 분기: 모델 ID 가져오기
+  const anModel = process.env.ANTHROPIC_MODEL;
+
+  // Completions API 지원 모델 리스트
+  const completionModels = [
+    'claude-opus-4-20250514',
+    'claude-sonnet-4-20250514',
+  ];
+
+  // 2-1) Completions API 사용
+  if (completionModels.includes(anModel)) {
+    console.log('⏳ Anthropic Completions stream start:', anModel);
+    const anth = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+    const stream = await anth.completions.create({
+      model: anModel,
+      stream: true,
+      prompt: `HTML만 순수하게 출력하세요. User: ${message}`,
+      max_tokens_to_sample: 1000,
+      temperature: 0.0,
+    });
+
+    res.write(': ping\n\n');
+    res.flush?.();
+
+    for await (const chunk of stream) {
+      const txt = chunk.completion || '';
+      if (txt) {
+        console.log('⏳ Anthropic completion chunk:', txt.length, 'chars');
+        res.write(`data: ${txt}\n\n`);
+        res.flush?.();
+      }
+    }
+    res.write('data: [DONE]\n\n');
+    console.log('✅ Anthropic Completions stream done');
+    return;
+  }
+
+  // 2-2) Messages API 전용 모델 (HTTP SSE 직접 처리)
+  console.log('⏳ Anthropic Messages API SSE piping start:', anModel);
+  const resp = await fetch('https://api.anthropic.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Accept':       'text/event-stream',
+      'Content-Type': 'application/json',
+      'X-API-Key':    process.env.ANTHROPIC_API_KEY,
+    },
+    body: JSON.stringify({
+      model: anModel,
+      stream: true,
+      messages: [
+        { role: 'system', content:
+            'You are an AI that ONLY outputs pure HTML—no markdown, no extra explanation.' },
+        { role: 'user', content: message }
+      ],
+      max_tokens_to_sample: 1000,
+      temperature: 0.0
+    }),
+  });
+
+  // 초기 ping
+  res.write(': ping\n\n');
+  res.flush?.();
+
+  // 받은 SSE 응답을 클라이언트로 그대로 파이프
+  resp.body.pipe(res);
+  resp.body.on('end', () => {
+    console.log('✅ Anthropic Messages API SSE piping done');
+    // 스트림 완료 신호
+    res.write('data: [DONE]\n\n');
+  });
 });
 
 // 6) 생성된 HTML 저장 엔드포인트
