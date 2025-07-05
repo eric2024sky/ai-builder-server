@@ -11,6 +11,7 @@ import { Readable } from 'stream';
 import logger, { logHistory } from './logger.js';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import fs from 'fs';
 
 // ES modules에서 __dirname 구현
 const __filename = fileURLToPath(import.meta.url);
@@ -2606,21 +2607,48 @@ app.get('/api/project/:projectId', async (req, res) => {
 });
 
 // ─── React 앱 catch-all 라우트 (반드시 모든 API 라우트 뒤에 위치) ───
-// 프로덕션 환경에서 React 앱 서빙
-if (process.env.NODE_ENV === 'production') {
-  // React 앱 정적 파일 서빙
-  const clientBuildPath = path.join(__dirname, '../ai-builder-client/dist');
-  app.use(express.static(clientBuildPath));
-  
-  // /api와 /preview로 시작하지 않는 모든 경로를 React 앱으로 전달
-  app.get('*', (req, res) => {
-    // API나 preview 경로는 여기서 처리하지 않음
-    if (req.path.startsWith('/api/') || req.path.startsWith('/preview/')) {
-      return res.status(404).json({ error: 'Not found' });
-    }
+// 프로덕션 환경에서 React 앱 서빙 (통합 배포 모드)
+if (process.env.NODE_ENV === 'production' && process.env.DEPLOYMENT_MODE !== 'separated') {
+  try {
+    const clientBuildPath = path.join(__dirname, '../ai-builder-client/dist');
     
-    // React 앱의 index.html 반환
-    res.sendFile('index.html', { root: clientBuildPath });
+    // 클라이언트 빌드 디렉토리가 존재하는지 확인
+    if (fs.existsSync(clientBuildPath)) {
+      logger.info('클라이언트 빌드 파일 발견, 정적 파일 서빙 활성화', { path: clientBuildPath });
+      
+      // React 앱 정적 파일 서빙
+      app.use(express.static(clientBuildPath));
+      
+      // /api와 /preview로 시작하지 않는 모든 경로를 React 앱으로 전달
+      app.get('*', (req, res) => {
+        // API나 preview 경로는 여기서 처리하지 않음
+        if (req.path.startsWith('/api/') || req.path.startsWith('/preview/')) {
+          return res.status(404).json({ error: 'Not found' });
+        }
+        
+        const indexPath = path.join(clientBuildPath, 'index.html');
+        if (fs.existsSync(indexPath)) {
+          res.sendFile(indexPath);
+        } else {
+          res.status(404).json({ error: 'Client build not found' });
+        }
+      });
+    } else {
+      logger.info('클라이언트 빌드 파일 없음, 분리 배포 모드로 동작');
+    }
+  } catch (error) {
+    logger.error('클라이언트 정적 파일 설정 오류', error);
+  }
+} else if (process.env.DEPLOYMENT_MODE === 'separated') {
+  logger.info('분리 배포 모드 - 클라이언트 파일 서빙 비활성화');
+  
+  // 분리 배포 모드에서는 루트 경로 접근 시 안내 메시지 표시
+  app.get('/', (req, res) => {
+    res.json({
+      message: 'AI Builder Server API',
+      mode: 'separated deployment',
+      client: process.env.CLIENT_URL || 'https://ai-builder-client.onrender.com'
+    });
   });
 }
 
