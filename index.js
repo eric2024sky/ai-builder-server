@@ -2158,7 +2158,11 @@ app.get('/preview/:projectId', async (req, res) => {
       });
 
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
-      // X-Frame-Options 제거하여 iframe 로드 허용
+      // iframe 로드를 위한 추가 헤더 설정
+      res.setHeader('X-Frame-Options', 'ALLOWALL');
+      res.setHeader('Content-Security-Policy', "frame-ancestors *;");
+      res.setHeader('Access-Control-Allow-Origin', process.env.CLIENT_URL || '*');
+      res.setHeader('Access-Control-Allow-Credentials', 'true');
       res.send(enhancedHtml);
       return;
     }
@@ -2258,14 +2262,18 @@ app.get('/preview/:projectId', async (req, res) => {
     
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     res.setHeader('X-Frame-Options', 'SAMEORIGIN');
-    // CSP 헤더 추가 - 외부 이미지 소스 허용
+    // iframe 로드를 위한 헤더 설정
+    res.setHeader('X-Frame-Options', 'ALLOWALL');
     res.setHeader('Content-Security-Policy', 
       "default-src 'self' 'unsafe-inline' 'unsafe-eval'; " +
       "img-src * data: https: blob:; " +
       "font-src * data: https:; " +
       "style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net; " +
-      "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net"
+      "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net; " +
+      "frame-ancestors *;"
     );
+    res.setHeader('Access-Control-Allow-Origin', process.env.CLIENT_URL || '*');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
     res.send(finalHtml);
 
   } catch (error) {
@@ -2470,14 +2478,18 @@ app.get('/preview/:projectId/:pageName', async (req, res) => {
         );
         
         res.setHeader('Content-Type', 'text/html; charset=utf-8');
-        // X-Frame-Options 제거하여 iframe 로드 허용
+        // iframe 로드를 위한 추가 헤더 설정
+        res.setHeader('X-Frame-Options', 'ALLOWALL');
         res.setHeader('Content-Security-Policy', 
           "default-src 'self' 'unsafe-inline' 'unsafe-eval'; " +
           "img-src * data: https: blob:; " +
           "font-src * data: https:; " +
           "style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net; " +
-          "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net"
+          "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net; " +
+          "frame-ancestors *;"
         );
+        res.setHeader('Access-Control-Allow-Origin', process.env.CLIENT_URL || '*');
+        res.setHeader('Access-Control-Allow-Credentials', 'true');
         return res.send(finalHtml);
       }
     }
@@ -2539,14 +2551,18 @@ app.get('/preview/:projectId/:pageName', async (req, res) => {
     
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     res.setHeader('X-Frame-Options', 'SAMEORIGIN');
-    // CSP 헤더 추가 - 외부 이미지 소스 허용
+    // iframe 로드를 위한 헤더 설정
+    res.setHeader('X-Frame-Options', 'ALLOWALL');
     res.setHeader('Content-Security-Policy', 
       "default-src 'self' 'unsafe-inline' 'unsafe-eval'; " +
       "img-src * data: https: blob:; " +
       "font-src * data: https:; " +
       "style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net; " +
-      "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net"
+      "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net; " +
+      "frame-ancestors *;"
     );
+    res.setHeader('Access-Control-Allow-Origin', process.env.CLIENT_URL || '*');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
     res.send(finalHtml);
 
   } catch (error) {
