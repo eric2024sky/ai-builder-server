@@ -42,9 +42,14 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 app.use('/static', express.static('public'));
 app.use('/images', express.static('public/images'));
 
+// X-Frame-Options 설정 - preview 경로는 제외
 app.use((req, res, next) => {
-  res.removeHeader('X-Frame-Options');
-  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  // preview 경로는 iframe으로 로드 가능하도록 설정
+  if (req.path.startsWith('/preview/')) {
+    res.removeHeader('X-Frame-Options');
+  } else {
+    res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  }
   next();
 });
 
@@ -2026,7 +2031,7 @@ app.get('/preview/:projectId', async (req, res) => {
       });
 
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
-      res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+      // X-Frame-Options 제거하여 iframe 로드 허용
       res.send(enhancedHtml);
       return;
     }
@@ -2338,7 +2343,7 @@ app.get('/preview/:projectId/:pageName', async (req, res) => {
         );
         
         res.setHeader('Content-Type', 'text/html; charset=utf-8');
-        res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+        // X-Frame-Options 제거하여 iframe 로드 허용
         res.setHeader('Content-Security-Policy', 
           "default-src 'self' 'unsafe-inline' 'unsafe-eval'; " +
           "img-src * data: https: blob:; " +
