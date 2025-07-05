@@ -24,12 +24,17 @@ const PORT = process.env.PORT || 4000;
 // 로깅 시스템은 logger.js에서 import됨
 
 // ─── 미들웨어 설정 ──────────────────────────────────────
-app.use(cors({
-  origin: true,
+// CORS 설정 - 환경 변수로 허용할 origin 지정 가능
+const corsOptions = {
+  origin: process.env.ALLOWED_ORIGINS ? 
+    process.env.ALLOWED_ORIGINS.split(',') : 
+    true, // 개발 환경에서는 모든 origin 허용
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
-}));
+};
+
+app.use(cors(corsOptions));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
