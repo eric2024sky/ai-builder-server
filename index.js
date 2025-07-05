@@ -768,8 +768,8 @@ const executeTwoStagePlan = async (userRequest, onProgress) => {
       throw new Error('니즈 분석 실패: ' + needsResult.error);
     }
     
-    // 이미지 검색 결과를 니즈 분석에 추가
-    needsResult.analysis.availableImages = imageResults;
+    // 이미지 검색 결과를 니즈 분석에 추가 - Unsplash 기능 제거됨
+    // needsResult.analysis.availableImages = imageResults;
     
     onProgress('needsAnalysis', needsResult.analysis);
     
