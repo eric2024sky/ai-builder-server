@@ -724,7 +724,7 @@ ${JSON.stringify(components.map(c => ({ name: c.name, html: c.html })), null, 2)
 
 이미지 사용 가이드:
 - 일반 이미지: Lorem Picsum (https://picsum.photos/1200/600)
-- 프로필/아바타: UI Avatars (https://ui-avatars.com/api/?name=Name&background=random)`}
+- 프로필/아바타: UI Avatars (https://ui-avatars.com/api/?name=Name&background=random)
 - 아이콘: Font Awesome 클래스 사용 (예: <i class="fas fa-home"></i>)
 - 로고: 인라인 SVG로 생성
 
