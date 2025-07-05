@@ -9,6 +9,12 @@ import Anthropic from '@anthropic-ai/sdk';
 import archiver from 'archiver';
 import { Readable } from 'stream';
 import logger, { logHistory } from './logger.js';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+// ES modules에서 __dirname 구현
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 dotenv.config();
 
@@ -88,8 +94,6 @@ const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
 });
 
-// ─── 이미지 검색 캐시 ───────────────────────
-const imageSearchCache = new Map();
 
 
 
@@ -186,91 +190,7 @@ const extractAndParseJSON = (text) => {
   throw new Error('응답에서 유효한 JSON을 추출할 수 없습니다. 응답 텍스트: ' + text.substring(0, 200) + '...');
 };
 
-// ─── Unsplash 이미지 검색 함수 ─────────────
-const searchUnsplashImages = async (keywords) => {
-  try {
-    // API 키가 설정되지 않은 경우 빈 배열 반환
-    if (!process.env.UNSPLASH_ACCESS_KEY || process.env.UNSPLASH_ACCESS_KEY === 'your-unsplash-access-key-here') {
-      logger.info('Unsplash API 키가 설정되지 않음, 이미지 검색 건너뜀');
-      return [];
-    }
 
-    // 캐시 확인
-    const cacheKey = keywords.join(',');
-    if (imageSearchCache.has(cacheKey)) {
-      logger.info('캐시에서 이미지 검색 결과 반환', { keywords });
-      return imageSearchCache.get(cacheKey);
-    }
-
-    // Unsplash API 호출
-    const query = keywords.join(' ');
-    const response = await fetch(`https://api.unsplash.com/search/photos?query=${encodeURIComponent(query)}&per_page=5`, {
-      headers: {
-        'Authorization': `Client-ID ${process.env.UNSPLASH_ACCESS_KEY}`
-      }
-    });
-
-    if (!response.ok) {
-      logger.error('Unsplash API 오류', { status: response.status });
-      return [];
-    }
-
-    const data = await response.json();
-    const images = data.results.map(img => ({
-      description: img.description || img.alt_description || 'Image',
-      url: img.urls.regular,
-      thumb: img.urls.thumb,
-      author: img.user.name,
-      link: img.links.html
-    }));
-
-    // 캐시에 저장 (5분간 유효)
-    imageSearchCache.set(cacheKey, images);
-    setTimeout(() => imageSearchCache.delete(cacheKey), 5 * 60 * 1000);
-
-    logger.info('Unsplash 이미지 검색 완료', { keywords, count: images.length });
-    return images;
-  } catch (error) {
-    logger.error('Unsplash 이미지 검색 오류', error);
-    return [];
-  }
-};
-
-// ─── 키워드 추출 함수 ─────────────
-const extractKeywords = async (userPrompt) => {
-  try {
-    const prompt = `다음 요청에서 이미지 검색을 위한 핵심 키워드를 추출해주세요.
-    한국어는 영어로 번역해주세요.
-    3-5개의 키워드를 JSON 배열로 반환해주세요.
-
-    요청: ${userPrompt}
-
-    예시 응답: ["lawyer", "legal", "consultation"]
-    
-    JSON 배열만 반환해주세요.`;
-
-    const response = await anthropic.messages.create({
-      model: process.env.ANTHROPIC_MODEL || 'claude-3-haiku-20240307',
-      max_tokens: 200,
-      messages: [{
-        role: 'user',
-        content: prompt
-      }]
-    });
-
-    const keywords = extractAndParseJSON(response.content[0].text);
-    logger.info('키워드 추출 완료', { userPrompt: userPrompt.substring(0, 50), keywords });
-    return keywords;
-  } catch (error) {
-    logger.error('키워드 추출 오류', error);
-    // 폴백: 간단한 키워드 추출
-    const fallbackKeywords = userPrompt
-      .split(/[\s,]+/)
-      .filter(word => word.length > 3)
-      .slice(0, 3);
-    return fallbackKeywords;
-  }
-};
 
 // 1단계: 니즈 분석 plan 함수
 const createNeedsAnalysisPlan = async (userRequest) => {
@@ -780,12 +700,7 @@ CSS만 반환해주세요.`;
   }
 };
 
-const assembleFullHTML = async (needsAnalysis, architecturePlan, components, imageResults = []) => {
-  const imageGuidelines = imageResults.length > 0 ? `
-사용 가능한 Unsplash 이미지:
-${imageResults.map((img, idx) => `${idx + 1}. ${img.description}: ${img.url}`).join('\n')}
-` : '';
-
+const assembleFullHTML = async (needsAnalysis, architecturePlan, components) => {
   const assemblyPrompt = `
 컴포넌트들을 조립하여 완전한 HTML 문서를 만들어주세요.
 
@@ -799,8 +714,6 @@ ${JSON.stringify(architecturePlan.layout, null, 2)}
 생성된 컴포넌트들:
 ${JSON.stringify(components.map(c => ({ name: c.name, html: c.html })), null, 2)}
 
-${imageGuidelines}
-
 요구사항:
 1. <!DOCTYPE html>로 시작하는 완전한 HTML5 문서
 2. 모든 CSS는 <style> 태그 내에 포함
@@ -810,10 +723,7 @@ ${imageGuidelines}
 6. Font Awesome 아이콘 사용: <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
 
 이미지 사용 가이드:
-${imageResults.length > 0 ? 
-`- 제공된 Unsplash 이미지 중 적절한 것 사용 (위 목록 참조)
-- 이미지가 맞지 않으면 Lorem Picsum 사용: https://picsum.photos/[width]/[height]` : 
-`- 일반 이미지: Lorem Picsum (https://picsum.photos/1200/600)
+- 일반 이미지: Lorem Picsum (https://picsum.photos/1200/600)
 - 프로필/아바타: UI Avatars (https://ui-avatars.com/api/?name=Name&background=random)`}
 - 아이콘: Font Awesome 클래스 사용 (예: <i class="fas fa-home"></i>)
 - 로고: 인라인 SVG로 생성
@@ -845,11 +755,6 @@ CRITICAL:
 // 2단계 plan 실행 함수
 const executeTwoStagePlan = async (userRequest, onProgress) => {
   try {
-    // 0단계: 이미지 검색을 위한 키워드 추출
-    onProgress('stage', { stage: 0, message: '키워드 추출 및 이미지 검색 중...' });
-    const keywords = await extractKeywords(userRequest);
-    const imageResults = await searchUnsplashImages(keywords);
-    
     // 1단계: 니즈 분석
     onProgress('stage', { stage: 1, message: '니즈 분석 중...' });
     const needsResult = await createNeedsAnalysisPlan(userRequest);
@@ -904,8 +809,7 @@ const executeTwoStagePlan = async (userRequest, onProgress) => {
     const fullHTML = await assembleFullHTML(
       needsResult.analysis,
       architectureResult.architecture,
-      components,
-      imageResults
+      components
     );
     
     return {
@@ -1690,20 +1594,10 @@ Response format: Generate only the complete HTML document.`;
         : message;
 
     } else {
-      // 단일 페이지 생성 시 이미지 검색
-      const keywords = await extractKeywords(message);
-      const imageResults = await searchUnsplashImages(keywords);
-      
-      const imageGuidelines = imageResults.length > 0 ? `
-Available Unsplash Images (use these when appropriate):
-${imageResults.map((img, idx) => `${idx + 1}. ${img.description}: ${img.url}`).join('\n')}
-` : '';
-
+      // 단일 페이지 생성
       systemPrompt = `You are an excellent web developer creating production-ready websites.
 
 Your task: ${message}
-
-${imageGuidelines}
 
 CRITICAL REQUIREMENTS:
 
@@ -1734,11 +1628,8 @@ CRITICAL REQUIREMENTS:
 5. IMAGES AND ICONS:
    - Font Awesome for icons: <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
    - Icon usage: <i class="fas fa-icon-name"></i>
-   ${imageResults.length > 0 ? 
-   `- Use provided Unsplash images where appropriate
-   - Fall back to Lorem Picsum if needed: https://picsum.photos/[width]/[height]` :
-   `- General images: Lorem Picsum (https://picsum.photos/1200/600)
-   - Profile/Avatar: UI Avatars (https://ui-avatars.com/api/?name=Name&background=random)`}
+   - General images: Lorem Picsum (https://picsum.photos/1200/600)
+   - Profile/Avatar: UI Avatars (https://ui-avatars.com/api/?name=Name&background=random)
    - Logo: Create with inline SVG
    - DO NOT use local image paths (/images/...)
 
@@ -2708,7 +2599,8 @@ app.get('/api/project/:projectId', async (req, res) => {
 // 프로덕션 환경에서 React 앱 서빙
 if (process.env.NODE_ENV === 'production') {
   // React 앱 정적 파일 서빙
-  app.use(express.static('../ai-builder-client/dist'));
+  const clientBuildPath = path.join(__dirname, '../ai-builder-client/dist');
+  app.use(express.static(clientBuildPath));
   
   // /api와 /preview로 시작하지 않는 모든 경로를 React 앱으로 전달
   app.get('*', (req, res) => {
@@ -2718,7 +2610,7 @@ if (process.env.NODE_ENV === 'production') {
     }
     
     // React 앱의 index.html 반환
-    res.sendFile('index.html', { root: '../ai-builder-client/dist' });
+    res.sendFile('index.html', { root: clientBuildPath });
   });
 }
 
