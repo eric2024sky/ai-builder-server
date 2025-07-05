@@ -1,4 +1,53 @@
-# 하위 페이지 이동 문제 해결
+# Render 배포 환경 iframe 연결 거부 문제 해결
+
+## 완료된 작업 목록
+- [x] 서버측 중복된 X-Frame-Options 헤더 제거 및 통일
+- [x] 클라이언트 App.jsx에서 iframe cross-origin 접근 코드 제거
+- [x] iframe 에러 처리 및 대체 UI 개선
+- [x] 환경 변수 설정 가이드 문서화
+- [x] 테스트 및 검증
+
+## 리뷰
+
+### 문제 분석
+Render에 클라이언트와 서버가 분리 배포되면서 발생한 cross-origin 문제였습니다:
+- 클라이언트: `https://ai-builder-client.onrender.com`
+- 서버: `https://ai-builder-server.onrender.com`
+- 브라우저의 Same-Origin Policy로 인해 iframe 내부 접근이 차단됨
+
+### 수행된 변경사항
+
+#### 1. 서버측 (index.js)
+- 중복된 `X-Frame-Options` 헤더 제거
+- 모든 preview 라우트에 일관된 헤더 설정:
+  - `X-Frame-Options: ALLOWALL`
+  - `Content-Security-Policy`에 `frame-ancestors *` 포함
+  - CORS 헤더 설정
+
+#### 2. 클라이언트측 (App.jsx)
+- iframe 내부 document/window 접근 시도 코드 제거
+- cross-origin 접근으로 인한 에러 발생 방지
+- 에러 처리 로직 단순화
+
+#### 3. 문서화 (CLAUDE.md)
+- Render 배포 시 필요한 환경 변수 설정 가이드 추가
+- 클라이언트: `VITE_API_URL` 설정 필수
+- 서버: `CLIENT_URL` 등 환경 변수 목록
+
+### 배포 후 필요한 작업
+1. Render 클라이언트 환경 변수에 `VITE_API_URL=https://ai-builder-server.onrender.com` 설정
+2. Render 서버 환경 변수에 `CLIENT_URL=https://ai-builder-client.onrender.com` 설정
+3. 양쪽 서비스 재배포
+4. 브라우저 캐시 삭제 후 테스트
+
+### 주의사항
+- 환경 변수는 빌드 시점에 적용되므로 설정 후 반드시 재배포 필요
+- iframe 내부 콘텐츠에는 더 이상 JavaScript로 접근할 수 없음 (보안상 정상)
+- 사용자는 "새 창에서 열기" 버튼으로 대체 접근 가능
+
+---
+
+# 이전 작업: 하위 페이지 이동 문제 해결
 
 ## 완료된 작업 ✅
 
