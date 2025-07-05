@@ -8,7 +8,9 @@ import mongoose from 'mongoose';
 import Anthropic from '@anthropic-ai/sdk';
 import archiver from 'archiver';
 import { Readable } from 'stream';
-import logger, { logHistory } from './logger.js';
+import dbLogger, { logger } from './services/dbLogger.js';
+import { requestLogger, errorLogger } from './middleware/requestLogger.js';
+import Log from './models/Log.js';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
@@ -22,7 +24,8 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 4000;
 
-// 로깅 시스템은 logger.js에서 import됨
+// DB 기반 로깅 시스템 초기화
+let logHistory = []; // 기존 코드와의 호환성을 위해 유지
 
 // ─── 미들웨어 설정 ──────────────────────────────────────
 // CORS 설정 - 환경 변수로 허용할 origin 지정 가능
@@ -43,6 +46,9 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 app.use('/static', express.static('public'));
 app.use('/images', express.static('public/images'));
 
+// 요청 로깅 미들웨어 추가
+app.use(requestLogger);
+
 // X-Frame-Options 설정 - preview 경로는 제외
 app.use((req, res, next) => {
   // preview 경로는 iframe으로 로드 가능하도록 설정
@@ -59,7 +65,11 @@ mongoose.connect(process.env.MONGODB_URI, {
   serverSelectionTimeoutMS: 5000,
   socketTimeoutMS: 45000,
 })
-  .then(() => logger.info('MongoDB 연결 성공'))
+  .then(async () => {
+    logger.info('MongoDB 연결 성공');
+    // 로그 컬렉션 확인 및 생성
+    await dbLogger.ensureLogCollection();
+  })
   .catch(err => logger.error('MongoDB 연결 실패', err));
 
 // ─── 페이지 저장 스키마 ─────────
@@ -1346,21 +1356,137 @@ app.get('/api/logs/download', (req, res) => {
 });
 
 // ─── 로그 조회 API ─────────────
-app.get('/api/logs', (req, res) => {
-  const { level, limit = 100 } = req.query;
-  
-  let filteredLogs = logHistory;
-  if (level) {
-    filteredLogs = logHistory.filter(log => log.level === level.toUpperCase());
+app.get('/api/logs', async (req, res) => {
+  try {
+    const { 
+      level, 
+      source, 
+      module,
+      startDate,
+      endDate,
+      limit = 100,
+      offset = 0,
+      projectId,
+      sessionId
+    } = req.query;
+    
+    // 쿼리 필터 구성
+    const filter = {};
+    if (level) filter.level = level.toUpperCase();
+    if (source) filter.source = source.toUpperCase();
+    if (module) filter.module = new RegExp(module, 'i');
+    if (projectId) filter['user.projectId'] = projectId;
+    if (sessionId) filter['user.sessionId'] = sessionId;
+    
+    // 날짜 필터
+    if (startDate || endDate) {
+      filter.timestamp = {};
+      if (startDate) filter.timestamp.$gte = new Date(startDate);
+      if (endDate) filter.timestamp.$lte = new Date(endDate);
+    }
+    
+    // 로그 조회
+    const logs = await Log.find(filter)
+      .sort({ timestamp: -1 })
+      .limit(parseInt(limit))
+      .skip(parseInt(offset))
+      .lean();
+    
+    const total = await Log.countDocuments(filter);
+    
+    res.json({
+      logs,
+      total,
+      limit: parseInt(limit),
+      offset: parseInt(offset)
+    });
+  } catch (error) {
+    logger.error('로그 조회 오류', error);
+    res.status(500).json({ error: '로그 조회 중 오류가 발생했습니다.' });
   }
-  
-  const logs = filteredLogs.slice(-limit);
-  
-  res.json({
-    logs,
-    total: filteredLogs.length,
-    limit: parseInt(limit)
-  });
+});
+
+// ─── 클라이언트 로그 수신 API ─────────────
+app.post('/api/logs', async (req, res) => {
+  try {
+    const logs = Array.isArray(req.body) ? req.body : [req.body];
+    
+    // 각 로그 항목 처리
+    for (const log of logs) {
+      await dbLogger.logClientEntry({
+        ...log,
+        metadata: {
+          ...log.metadata,
+          clientIp: req.ip || req.connection.remoteAddress,
+          userAgent: req.get('user-agent')
+        }
+      });
+    }
+    
+    res.json({ 
+      success: true, 
+      message: `${logs.length}개의 로그를 수신했습니다.` 
+    });
+  } catch (error) {
+    logger.error('클라이언트 로그 수신 오류', error);
+    res.status(500).json({ error: '로그 저장 중 오류가 발생했습니다.' });
+  }
+});
+
+// ─── 로그 통계 API ─────────────
+app.get('/api/logs/stats', async (req, res) => {
+  try {
+    const { projectId, hours = 24 } = req.query;
+    const since = new Date(Date.now() - hours * 60 * 60 * 1000);
+    
+    const filter = { timestamp: { $gte: since } };
+    if (projectId) filter['user.projectId'] = projectId;
+    
+    // 레벨별 통계
+    const levelStats = await Log.aggregate([
+      { $match: filter },
+      { $group: { _id: '$level', count: { $sum: 1 } } }
+    ]);
+    
+    // 시간별 통계
+    const hourlyStats = await Log.aggregate([
+      { $match: filter },
+      {
+        $group: {
+          _id: { $hour: '$timestamp' },
+          count: { $sum: 1 },
+          errors: {
+            $sum: { $cond: [{ $eq: ['$level', 'ERROR'] }, 1, 0] }
+          }
+        }
+      },
+      { $sort: { _id: 1 } }
+    ]);
+    
+    // 모듈별 에러 통계
+    const moduleErrors = await Log.aggregate([
+      { 
+        $match: { 
+          ...filter, 
+          level: 'ERROR' 
+        } 
+      },
+      { $group: { _id: '$module', count: { $sum: 1 } } },
+      { $sort: { count: -1 } },
+      { $limit: 10 }
+    ]);
+    
+    res.json({
+      levelStats,
+      hourlyStats,
+      moduleErrors,
+      totalLogs: await Log.countDocuments(filter),
+      period: { hours, since }
+    });
+  } catch (error) {
+    logger.error('로그 통계 조회 오류', error);
+    res.status(500).json({ error: '로그 통계 조회 중 오류가 발생했습니다.' });
+  }
 });
 
 
@@ -2652,6 +2778,29 @@ if (process.env.NODE_ENV === 'production' && process.env.DEPLOYMENT_MODE !== 'se
   });
 }
 
+// ─── 전역 에러 핸들링 미들웨어 ─────────────
+app.use(errorLogger);
+
+// 404 핸들러
+app.use((req, res, next) => {
+  logger.warn('404 Not Found', { 
+    method: req.method, 
+    url: req.originalUrl 
+  });
+  res.status(404).json({ error: '요청한 리소스를 찾을 수 없습니다.' });
+});
+
+// 전역 에러 핸들러
+app.use((err, req, res, next) => {
+  const status = err.status || 500;
+  const message = err.message || '서버 내부 오류가 발생했습니다.';
+  
+  res.status(status).json({
+    error: message,
+    ...(process.env.NODE_ENV === 'development' && { stack: err.stack })
+  });
+});
+
 // ─── 서버 시작 ──────────────────────────────────────────
 const server = app.listen(PORT, () => {
   logger.info('서버 시작', {
@@ -2686,9 +2835,29 @@ server.on('error', (error) => {
 });
 
 // ─── 우아한 종료 처리 ───────────────────────────────────
-process.on('SIGINT', async () => {
- logger.info('서버 종료 시작');
- await mongoose.connection.close();
- logger.info('MongoDB 연결 해제 완료');
- process.exit(0);
-});
+const gracefulShutdown = async (signal) => {
+  logger.info(`${signal} 시그널 수신, 서버 종료 시작`);
+  
+  // 남은 로그 플러시
+  await dbLogger.shutdown();
+  logger.info('로그 플러시 완료');
+  
+  // MongoDB 연결 종료
+  await mongoose.connection.close();
+  logger.info('MongoDB 연결 해제 완료');
+  
+  // 서버 종료
+  server.close(() => {
+    logger.info('서버 종료 완료');
+    process.exit(0);
+  });
+  
+  // 강제 종료 타임아웃 (10초)
+  setTimeout(() => {
+    console.error('서버 종료 타임아웃, 강제 종료');
+    process.exit(1);
+  }, 10000);
+};
+
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
