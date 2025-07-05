@@ -1,0 +1,11 @@
+
+> server@1.0.0 start
+> node index.js
+
+[INFO] 2025-07-04T17:57:40.830Z - 서버 시작 {
+  port: 4000,
+  mongodb: '설정됨',
+  anthropic: '설정됨',
+  model: 'claude-3-haiku-20240307'
+}
+[INFO] 2025-07-04T17:57:40.837Z - MongoDB 연결 성공 

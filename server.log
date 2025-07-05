@@ -1,0 +1,155 @@
+
+> server@1.0.0 start
+> node index.js
+
+[INFO] 2025-07-04T10:57:38.741Z - 서버 시작 {
+  port: 4000,
+  mongodb: '설정됨',
+  anthropic: '설정됨',
+  model: 'claude-opus-4-20250514'
+}
+[INFO] 2025-07-04T10:57:38.751Z - MongoDB 연결 성공 
+[INFO] 2025-07-04T10:58:21.130Z - 스트림 요청 {
+  message: '책 저자와 독자 사이에 팬덤을 형성할 수 있는 서비스를 만들어 줘.',
+  planType: '',
+  projectId: '',
+  pageId: '',
+  pageName: 'index',
+  isModification: 'false',
+  modificationScope: '',
+  targetPageName: '',
+  hasColorScheme: false
+}
+[INFO] 2025-07-04T10:58:21.131Z - 2단계 Plan 워크플로우 시작 
+[ERROR] 2025-07-04T10:59:37.951Z - NotificationBell 컴포넌트 생성 오류 Error: 응답에서 유효한 JSON을 추출할 수 없습니다. 응답 텍스트: ```json
+{
+  "name": "NotificationBell",
+  "description": "사용자에게 새로운 알림을 시각적으로 표시하는 알림 벨 컴포넌트. 알림 개수를 배지로 표시하고, 클릭 시 알림 드롭다운을 토글합니다.",
+  "props": {
+    "count": "표시할 알림 개수 (number, 기본값: 0)",
+    "isAct...
+    at extractAndParseJSON (file:///Users/kjh/Desktop/aa/dd/ai-builder-server/index.js:179:9)
+    at createGlobalComponentDetails (file:///Users/kjh/Desktop/aa/dd/ai-builder-server/index.js:480:25)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async createArchitecturePlanHierarchical (file:///Users/kjh/Desktop/aa/dd/ai-builder-server/index.js:570:30)
+    at async executeTwoStagePlan (file:///Users/kjh/Desktop/aa/dd/ai-builder-server/index.js:750:32)
+    at async file:///Users/kjh/Desktop/aa/dd/ai-builder-server/index.js:1268:24
+[ERROR] 2025-07-04T10:59:53.495Z - SearchBar 컴포넌트 생성 오류 Error: 응답에서 유효한 JSON을 추출할 수 없습니다. 응답 텍스트: ```json
+{
+  "name": "SearchBar",
+  "description": "사이트 전체에서 사용되는 통합 검색 바 컴포넌트. 검색어 입력, 자동완성, 검색 버튼 기능을 포함하며 반응형 디자인을 지원합니다.",
+  "props": {
+    "placeholder": "검색 입력 필드에 표시될 플레이스홀더 텍스트 (기본값: 'Search......
+    at extractAndParseJSON (file:///Users/kjh/Desktop/aa/dd/ai-builder-server/index.js:179:9)
+    at createGlobalComponentDetails (file:///Users/kjh/Desktop/aa/dd/ai-builder-server/index.js:480:25)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async createArchitecturePlanHierarchical (file:///Users/kjh/Desktop/aa/dd/ai-builder-server/index.js:570:30)
+    at async executeTwoStagePlan (file:///Users/kjh/Desktop/aa/dd/ai-builder-server/index.js:750:32)
+    at async file:///Users/kjh/Desktop/aa/dd/ai-builder-server/index.js:1268:24
+[INFO] 2025-07-04T11:00:31.470Z - 스트림 요청 {
+  message: '간단한 개인 블로그 웹사이트를 만들어주세요.',
+  planType: '',
+  projectId: '',
+  pageId: '',
+  pageName: 'index',
+  isModification: 'false',
+  modificationScope: '',
+  targetPageName: '',
+  hasColorScheme: false
+}
+[INFO] 2025-07-04T11:00:31.471Z - 2단계 Plan 워크플로우 시작 
+[ERROR] 2025-07-04T11:02:29.529Z - 컴포넌트 CSS 생성 오류 RateLimitError: 429 {"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed the rate limit for your organization (fe75e3ef-7f2b-44e1-962a-d2ef7fec354f) of 4,000 output tokens per minute. For details, refer to: https://docs.anthropic.com/en/api/rate-limits. You can see the response headers for current usage. Please reduce the prompt length or the maximum tokens requested, or try again later. You may also contact sales at https://www.anthropic.com/contact-sales to discuss your options for a rate limit increase."}}
+    at APIError.generate (file:///Users/kjh/Desktop/aa/dd/ai-builder-server/node_modules/@anthropic-ai/sdk/core/error.mjs:55:20)
+    at Anthropic.makeStatusError (file:///Users/kjh/Desktop/aa/dd/ai-builder-server/node_modules/@anthropic-ai/sdk/client.mjs:149:32)
+    at Anthropic.makeRequest (file:///Users/kjh/Desktop/aa/dd/ai-builder-server/node_modules/@anthropic-ai/sdk/client.mjs:301:30)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async generateComponentCSS (file:///Users/kjh/Desktop/aa/dd/ai-builder-server/index.js:674:22)
+    at async executeTwoStagePlan (file:///Users/kjh/Desktop/aa/dd/ai-builder-server/index.js:775:19)
+    at async file:///Users/kjh/Desktop/aa/dd/ai-builder-server/index.js:1268:24 {
+  status: 429,
+  headers: Headers {
+    date: 'Fri, 04 Jul 2025 11:02:29 GMT',
+    'content-type': 'application/json',
+    'content-length': '529',
+    connection: 'keep-alive',
+    'x-should-retry': 'true',
+    'anthropic-ratelimit-input-tokens-limit': '20000',
+    'anthropic-ratelimit-input-tokens-remaining': '20000',
+    'anthropic-ratelimit-input-tokens-reset': '2025-07-04T11:02:29Z',
+    'anthropic-ratelimit-output-tokens-limit': '4000',
+    'anthropic-ratelimit-output-tokens-remaining': '0',
+    'anthropic-ratelimit-output-tokens-reset': '2025-07-04T11:03:31Z',
+    'anthropic-ratelimit-requests-limit': '50',
+    'anthropic-ratelimit-requests-remaining': '50',
+    'anthropic-ratelimit-requests-reset': '2025-07-04T11:02:29Z',
+    'retry-after': '2',
+    'anthropic-ratelimit-tokens-limit': '24000',
+    'anthropic-ratelimit-tokens-remaining': '20000',
+    'anthropic-ratelimit-tokens-reset': '2025-07-04T11:02:29Z',
+    'request-id': 'req_011CQmsAWZ4QuwB51K9i217m',
+    'strict-transport-security': 'max-age=31536000; includeSubDomains; preload',
+    'anthropic-organization-id': 'fe75e3ef-7f2b-44e1-962a-d2ef7fec354f',
+    via: '1.1 google',
+    'cf-cache-status': 'DYNAMIC',
+    'x-robots-tag': 'none',
+    server: 'cloudflare',
+    'cf-ray': '959e21713868d1ee-ICN'
+  },
+  requestID: 'req_011CQmsAWZ4QuwB51K9i217m',
+  error: {
+    type: 'error',
+    error: {
+      type: 'rate_limit_error',
+      message: 'This request would exceed the rate limit for your organization (fe75e3ef-7f2b-44e1-962a-d2ef7fec354f) of 4,000 output tokens per minute. For details, refer to: https://docs.anthropic.com/en/api/rate-limits. You can see the response headers for current usage. Please reduce the prompt length or the maximum tokens requested, or try again later. You may also contact sales at https://www.anthropic.com/contact-sales to discuss your options for a rate limit increase.'
+    }
+  }
+}
+[ERROR] 2025-07-04T11:02:29.532Z - 2단계 plan 실행 오류 RateLimitError: 429 {"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed the rate limit for your organization (fe75e3ef-7f2b-44e1-962a-d2ef7fec354f) of 4,000 output tokens per minute. For details, refer to: https://docs.anthropic.com/en/api/rate-limits. You can see the response headers for current usage. Please reduce the prompt length or the maximum tokens requested, or try again later. You may also contact sales at https://www.anthropic.com/contact-sales to discuss your options for a rate limit increase."}}
+    at APIError.generate (file:///Users/kjh/Desktop/aa/dd/ai-builder-server/node_modules/@anthropic-ai/sdk/core/error.mjs:55:20)
+    at Anthropic.makeStatusError (file:///Users/kjh/Desktop/aa/dd/ai-builder-server/node_modules/@anthropic-ai/sdk/client.mjs:149:32)
+    at Anthropic.makeRequest (file:///Users/kjh/Desktop/aa/dd/ai-builder-server/node_modules/@anthropic-ai/sdk/client.mjs:301:30)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async generateComponentCSS (file:///Users/kjh/Desktop/aa/dd/ai-builder-server/index.js:674:22)
+    at async executeTwoStagePlan (file:///Users/kjh/Desktop/aa/dd/ai-builder-server/index.js:775:19)
+    at async file:///Users/kjh/Desktop/aa/dd/ai-builder-server/index.js:1268:24 {
+  status: 429,
+  headers: Headers {
+    date: 'Fri, 04 Jul 2025 11:02:29 GMT',
+    'content-type': 'application/json',
+    'content-length': '529',
+    connection: 'keep-alive',
+    'x-should-retry': 'true',
+    'anthropic-ratelimit-input-tokens-limit': '20000',
+    'anthropic-ratelimit-input-tokens-remaining': '20000',
+    'anthropic-ratelimit-input-tokens-reset': '2025-07-04T11:02:29Z',
+    'anthropic-ratelimit-output-tokens-limit': '4000',
+    'anthropic-ratelimit-output-tokens-remaining': '0',
+    'anthropic-ratelimit-output-tokens-reset': '2025-07-04T11:03:31Z',
+    'anthropic-ratelimit-requests-limit': '50',
+    'anthropic-ratelimit-requests-remaining': '50',
+    'anthropic-ratelimit-requests-reset': '2025-07-04T11:02:29Z',
+    'retry-after': '2',
+    'anthropic-ratelimit-tokens-limit': '24000',
+    'anthropic-ratelimit-tokens-remaining': '20000',
+    'anthropic-ratelimit-tokens-reset': '2025-07-04T11:02:29Z',
+    'request-id': 'req_011CQmsAWZ4QuwB51K9i217m',
+    'strict-transport-security': 'max-age=31536000; includeSubDomains; preload',
+    'anthropic-organization-id': 'fe75e3ef-7f2b-44e1-962a-d2ef7fec354f',
+    via: '1.1 google',
+    'cf-cache-status': 'DYNAMIC',
+    'x-robots-tag': 'none',
+    server: 'cloudflare',
+    'cf-ray': '959e21713868d1ee-ICN'
+  },
+  requestID: 'req_011CQmsAWZ4QuwB51K9i217m',
+  error: {
+    type: 'error',
+    error: {
+      type: 'rate_limit_error',
+      message: 'This request would exceed the rate limit for your organization (fe75e3ef-7f2b-44e1-962a-d2ef7fec354f) of 4,000 output tokens per minute. For details, refer to: https://docs.anthropic.com/en/api/rate-limits. You can see the response headers for current usage. Please reduce the prompt length or the maximum tokens requested, or try again later. You may also contact sales at https://www.anthropic.com/contact-sales to discuss your options for a rate limit increase.'
+    }
+  }
+}
+[ERROR] 2025-07-04T11:02:29.533Z - 2단계 plan 실행 오류 Error: 429 {"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed the rate limit for your organization (fe75e3ef-7f2b-44e1-962a-d2ef7fec354f) of 4,000 output tokens per minute. For details, refer to: https://docs.anthropic.com/en/api/rate-limits. You can see the response headers for current usage. Please reduce the prompt length or the maximum tokens requested, or try again later. You may also contact sales at https://www.anthropic.com/contact-sales to discuss your options for a rate limit increase."}}
+    at file:///Users/kjh/Desktop/aa/dd/ai-builder-server/index.js:1294:17
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
